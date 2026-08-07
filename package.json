@@ -11,6 +11,8 @@
     ],
     "scripts": {
         "build": "tsc && shx chmod +x dist/*.js",
+        "build:server": "tsc -p tsconfig.server.json",
+        "start:server": "node dist-server/Core/index.js",
         "prepare": "npm run build",
         "watch": "tsc --watch",
         "lint:fix": "eslint --fix",

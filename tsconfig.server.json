@@ -1,0 +1,16 @@
+{
+  // Server build for the multi-tenant HTTP entry point (Core/index.ts), used by
+  // the Fly image. Compiles BOTH src/ and Core/ with rootDir "." so the emitted
+  // layout mirrors the source (dist-server/src/... and dist-server/Core/...),
+  // keeping the Core→src relative ".js" imports valid at runtime.
+  //
+  // The package build (tsconfig.json → dist/index.js) is unchanged and still
+  // produces the single-tenant stdio binary + npm package.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist-server"
+  },
+  "include": ["src/**/*.ts", "Core/**/*.ts"],
+  "exclude": ["node_modules", "dist", "dist-server", "tests"]
+}
