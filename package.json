@@ -23,6 +23,7 @@
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.6.0",
         "dotenv": "^16.4.7",
+        "fastify": "^5.11.2",
         "intuit-oauth": "^4.0.0",
         "node-quickbooks": "^2.0.43",
         "open": "^9.1.0",
