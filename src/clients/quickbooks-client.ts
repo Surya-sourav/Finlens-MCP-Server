@@ -37,10 +37,33 @@ const environment = process.env.QUICKBOOKS_ENVIRONMENT || 'sandbox';
 // Fix for Issue #5: Use env var with underscore (QUICKBOOKS_REDIRECT_URI)
 const redirect_uri = process.env.QUICKBOOKS_REDIRECT_URI || 'http://localhost:8000/callback';
 
-// Only throw error if client_id or client_secret is missing
-if (!client_id || !client_secret || !redirect_uri) {
+// In multi-tenant mode the process is fronted by the HTTP transport (Core/) and
+// carries no single global QB refresh token / realm — per-request credentials
+// are injected via QuickbooksClient.useTenantResolver(). Skip the single-tenant
+// env guard in that mode so this module can be imported (transitively, via the
+// tool handlers) without global QB app credentials present.
+const MULTI_TENANT = process.env.QBO_MULTI_TENANT === 'true';
+
+// Only throw error if client_id or client_secret is missing (single-tenant only)
+if (!MULTI_TENANT && (!client_id || !client_secret || !redirect_uri)) {
   throw Error("Client ID, Client Secret and Redirect URI must be set in environment variables");
 }
+
+/**
+ * Source of per-request tenant QuickBooks credentials. Implemented by the
+ * multi-tenant HTTP layer's AsyncLocalStorage TenantContext (Core/), which the
+ * Vault backs. Kept structural (not a Core import) so src/ never depends on
+ * Core/ — see the build-boundary note in the plan.
+ */
+export interface TenantCredentialSource {
+  getFreshAccessToken(): Promise<{ accessToken: string; realmId: string; isSandbox: boolean }>;
+}
+
+// Injected once at boot by Core/http/app.ts. Returns the credential source for
+// the tenant currently in scope, or undefined when no tenant is in scope
+// (single-tenant / stdio mode), in which case the existing global-singleton
+// path is used.
+let tenantResolver: (() => TenantCredentialSource | undefined) | null = null;
 
 // ── QuickbooksClient ─────────────────────────────────────────────────────────
 // Exported so handlers can call QuickbooksClient.getInstance() directly,
@@ -449,10 +472,46 @@ export class QuickbooksClient {
     return this.authInFlight;
   }
 
+  // ── Multi-tenant dependency-injection seam ───────────────────────────────
+  // Core/http/app.ts calls this once at boot with a resolver that reads the
+  // per-request TenantContext from AsyncLocalStorage. When set (and returning a
+  // source), getInstance()/getAuthCredentials() serve per-tenant credentials;
+  // otherwise they fall through to the single-tenant global-singleton path.
+  static useTenantResolver(
+    resolver: (() => TenantCredentialSource | undefined) | null
+  ): void {
+    tenantResolver = resolver;
+  }
+
+  // Builds a fresh node-quickbooks instance from a tenant's credentials. Fresh
+  // per call by design: the access token is short-lived and the Vault owns
+  // caching/refresh, so there is no shared mutable per-realm state here — that
+  // statelessness is the cross-tenant isolation guarantee.
+  private static async buildForTenant(src: TenantCredentialSource): Promise<QuickBooks> {
+    const { accessToken, realmId, isSandbox } = await src.getFreshAccessToken();
+    return new QuickBooks(
+      quickbooksClient.clientId,
+      quickbooksClient.clientSecret,
+      accessToken,
+      false, // no token secret for OAuth 2.0
+      realmId,
+      isSandbox, // useSandbox
+      false, // debug?
+      null, // minor version
+      '2.0' // oauth version
+      // NOTE: no refreshToken arg — the Vault owns refresh; the client never
+      // refreshes in-process in multi-tenant mode.
+    );
+  }
+
   // ── Called by every handler on every request ─────────────────────────────
   // Checks token freshness on each invocation so handlers stay functional
   // across 60-minute token boundaries without server restarts.
   static async getInstance(): Promise<QuickBooks> {
+    const src = tenantResolver?.();
+    if (src) {
+      return QuickbooksClient.buildForTenant(src);
+    }
     if (quickbooksClient.isTokenExpiredOrExpiringSoon()) {
       await quickbooksClient.authenticate();
     }
@@ -467,6 +526,10 @@ export class QuickbooksClient {
   // (e.g. POST /upload for binary attachments). Ensures token freshness on
   // every invocation, same as getInstance().
   static async getAuthCredentials(): Promise<{ accessToken: string; realmId: string; isSandbox: boolean }> {
+    const src = tenantResolver?.();
+    if (src) {
+      return src.getFreshAccessToken();
+    }
     if (quickbooksClient.isTokenExpiredOrExpiringSoon() || !quickbooksClient.accessToken) {
       await quickbooksClient.authenticate();
     }
@@ -489,8 +552,12 @@ export class QuickbooksClient {
 }
 
 export const quickbooksClient = new QuickbooksClient({
-  clientId: client_id,
-  clientSecret: client_secret,
+  // In multi-tenant mode these may be absent; the singleton is never used to
+  // authenticate in that mode (getInstance/getAuthCredentials take the tenant
+  // branch), so empty strings are safe placeholders. In single-tenant mode the
+  // guard above guarantees both are present.
+  clientId: client_id ?? "",
+  clientSecret: client_secret ?? "",
   refreshToken: refresh_token,
   realmId: realm_id,
   environment: environment,
