@@ -70,4 +70,46 @@ describe('handleMcpPost', () => {
     expect(fakeTransport.close).toHaveBeenCalledTimes(1);
     expect(fakeServer.close).toHaveBeenCalledTimes(1);
   });
+
+  it('SECURITY: binds tenant context to the SDK fire-and-forget onmessage dispatch', async () => {
+    // Reproduces the real leak: the MCP SDK calls transport.onmessage WITHOUT
+    // awaiting, so the tool handler runs detached from handleRequest's scope.
+    // handleMcpPost must wrap onmessage so the handler still sees the tenant.
+    let tenantSeenInDispatch: string | undefined;
+
+    const fakeServer = {
+      // The real SDK assigns transport.onmessage during connect(); mimic that.
+      connect: jest.fn(async (t: { onmessage?: (m: unknown, e?: unknown) => void }) => {
+        t.onmessage = () => {
+          // stands in for the Protocol → tool handler reading the tenant context
+          tenantSeenInDispatch = getTenantContext()?.tenantId;
+        };
+      }),
+      close: jest.fn(async () => {}),
+    };
+    const fakeTransport: {
+      onmessage?: (m: unknown, e?: unknown) => void;
+      handleRequest: (r: unknown, s: unknown, b?: unknown) => Promise<void>;
+      close: () => Promise<void>;
+    } = {
+      onmessage: undefined,
+      // SDK dispatches the message fire-and-forget from within handleRequest.
+      handleRequest: jest.fn(async () => {
+        fakeTransport.onmessage?.({ jsonrpc: '2.0', method: 'tools/call' });
+      }),
+      close: jest.fn(async () => {}),
+    };
+
+    const deps = {
+      createServer: () => fakeServer,
+      registerTools: () => {},
+      createTransport: () => fakeTransport,
+    };
+    const res = { on: jest.fn() } as never;
+
+    await handleMcpPost({} as never, res, makeCtx('TENANT-42'), {}, deps as never);
+    await new Promise((r) => setImmediate(r));
+
+    expect(tenantSeenInDispatch).toBe('TENANT-42');
+  });
 });

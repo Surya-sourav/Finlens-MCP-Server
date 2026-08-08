@@ -130,5 +130,27 @@ export async function handleMcpPost(
   });
 
   await server.connect(transport);
+
+  // CRITICAL: the MCP SDK dispatches each JSON-RPC message via transport.onmessage
+  // WITHOUT awaiting the handler, so the tool handler runs detached from
+  // handleRequest's async scope. Wrapping only handleRequest would therefore lose
+  // the AsyncLocalStorage tenant context by the time a tool runs — causing
+  // getTenantContext() to be undefined and the QB client to fall back to global
+  // creds (a cross-tenant leak). Bind the context at the dispatch point so every
+  // tool handler executes inside the correct tenant scope.
+  const withOnMessage = transport as unknown as {
+    onmessage?: (message: unknown, extra?: unknown) => void;
+  };
+  const dispatch = withOnMessage.onmessage;
+  if (dispatch) {
+    withOnMessage.onmessage = (message, extra) => {
+      void runWithTenant(ctx, async () => {
+        dispatch.call(withOnMessage, message, extra);
+      }).catch(() => {
+        /* handler errors are surfaced by the Protocol as JSON-RPC errors */
+      });
+    };
+  }
+
   await runWithTenant(ctx, () => transport.handleRequest(req, res, body));
 }

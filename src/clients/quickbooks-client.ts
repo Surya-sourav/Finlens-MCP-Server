@@ -512,6 +512,14 @@ export class QuickbooksClient {
     if (src) {
       return QuickbooksClient.buildForTenant(src);
     }
+    // SECURITY: in multi-tenant mode, never fall back to the global/singleton QB
+    // credentials — doing so would serve one tenant's (or the operator's) QB
+    // company to every caller. Fail closed if no tenant is in scope.
+    if (MULTI_TENANT) {
+      throw new Error(
+        "No tenant credentials in scope; refusing to use global QuickBooks credentials in multi-tenant mode.",
+      );
+    }
     if (quickbooksClient.isTokenExpiredOrExpiringSoon()) {
       await quickbooksClient.authenticate();
     }
@@ -529,6 +537,12 @@ export class QuickbooksClient {
     const src = tenantResolver?.();
     if (src) {
       return src.getFreshAccessToken();
+    }
+    // SECURITY: fail closed in multi-tenant mode (see getInstance).
+    if (MULTI_TENANT) {
+      throw new Error(
+        "No tenant credentials in scope; refusing to use global QuickBooks credentials in multi-tenant mode.",
+      );
     }
     if (quickbooksClient.isTokenExpiredOrExpiringSoon() || !quickbooksClient.accessToken) {
       await quickbooksClient.authenticate();
