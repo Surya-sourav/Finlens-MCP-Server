@@ -210,3 +210,169 @@ describe('VaultManager', () => {
     expect(await vault.getConnectionByTenant(TENANT)).toBeNull();
   });
 });
+
+describe('VaultManager — revoke + failure-classification branches', () => {
+  const kp = keyProvider;
+  const seed = (vm: InstanceType<typeof VaultManager>) =>
+    vm.upsertConnectionFromCallback(TENANT, {
+      realmId: 'r',
+      refreshToken: 'rt',
+      accessToken: 'at',
+      expiresIn: 3600,
+      xRefreshTokenExpiresIn: 8_640_000,
+      environment: 'sandbox',
+    });
+  const stubRefresh = async () => ({ token: { access_token: 'a' } });
+
+  it('calls remote revoke (when supported) then marks revoked', async () => {
+    const revoke = jest.fn(async (_o: { token: string }) => ({}));
+    const vm = new VaultManager({
+      repo: new InMemoryConnectionRepo(),
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: stubRefresh, revoke }),
+      now: () => 1_700_000_000_000,
+    });
+    await seed(vm);
+    await vm.revokeConnection(TENANT);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(await vm.getConnectionByTenant(TENANT)).toBeNull();
+  });
+
+  it('marks revoked even when remote revoke throws', async () => {
+    const revoke = jest.fn(async () => {
+      throw new Error('revoke failed');
+    });
+    const vm = new VaultManager({
+      repo: new InMemoryConnectionRepo(),
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: stubRefresh, revoke }),
+      now: () => 1_700_000_000_000,
+    });
+    await seed(vm);
+    await vm.revokeConnection(TENANT);
+    expect(await vm.getConnectionByTenant(TENANT)).toBeNull();
+  });
+
+  it('revokeConnection is a no-op when nothing is connected', async () => {
+    const vm = new VaultManager({
+      repo: new InMemoryConnectionRepo(),
+      keyProvider: kp,
+      makeOAuthClient,
+      now: () => 1,
+    });
+    await expect(vm.revokeConnection('nobody')).resolves.toBeUndefined();
+  });
+
+  it('classifies an HTTP 400 without invalid_grant text as a permanent failure', async () => {
+    const err = Object.assign(new Error('bad request'), { statusCode: 400 });
+    const refresh = jest.fn<(rt: string) => Promise<{ token: { access_token: string } }>>().mockRejectedValueOnce(err);
+    let now = 0;
+    const vm = new VaultManager({
+      repo: new InMemoryConnectionRepo(),
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: refresh }),
+      now: () => now,
+      accessBufferMs: 0,
+    });
+    await seed(vm);
+    now = 3600 * 1000 + 1; // access token expired
+    await expect(vm.getFreshAccessToken(TENANT)).rejects.toBeInstanceOf(RefreshPermanentError);
+  });
+
+  it('does not change refresh expiry when x_refresh_token_expires_in is absent on rotation', async () => {
+    const refresh = jest
+      .fn<
+        (rt: string) => Promise<{
+          token: { access_token: string; expires_in?: number; refresh_token?: string };
+        }>
+      >()
+      .mockResolvedValueOnce({ token: { access_token: 'a2', expires_in: 3600, refresh_token: 'rotated' } });
+    let now = 0;
+    const repo2 = new InMemoryConnectionRepo();
+    const vm = new VaultManager({
+      repo: repo2,
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: refresh }),
+      now: () => now,
+      accessBufferMs: 0,
+    });
+    await seed(vm);
+    const before = (await vm.getConnectionByTenant(TENANT))!.refreshTokenExpiresAt.getTime();
+    now = 3600 * 1000 + 1;
+    await vm.getFreshAccessToken(TENANT);
+    const conn = (await vm.getConnectionByTenant(TENANT))!;
+    expect(conn.refreshTokenExpiresAt.getTime()).toBe(before); // unchanged
+    expect(await decryptSecret(conn.encRefreshToken, kp, TENANT)).toBe('rotated');
+  });
+
+  it('uses a default clock/buffer when not injected', async () => {
+    const vm = new VaultManager({ repo: new InMemoryConnectionRepo(), keyProvider: kp, makeOAuthClient });
+    const row = await vm.upsertConnectionFromCallback(TENANT, {
+      realmId: 'r',
+      refreshToken: 'rt',
+      accessToken: 'at',
+      expiresIn: 3600,
+      xRefreshTokenExpiresIn: 8_640_000,
+      environment: 'sandbox',
+    });
+    expect(row.realmId).toBe('r');
+  });
+
+  it('defaults the access-token lifetime to 3600s when expires_in is absent', async () => {
+    const refresh = jest
+      .fn<(rt: string) => Promise<{ token: { access_token: string } }>>()
+      .mockResolvedValueOnce({ token: { access_token: 'a2' } });
+    let now = 0;
+    const repo2 = new InMemoryConnectionRepo();
+    const vm = new VaultManager({
+      repo: repo2,
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: refresh }),
+      now: () => now,
+      accessBufferMs: 0,
+    });
+    await seed(vm);
+    now = 3600 * 1000 + 1;
+    const creds = await vm.getFreshAccessToken(TENANT);
+    expect(creds.accessToken).toBe('a2');
+    expect((await vm.getConnectionByTenant(TENANT))!.accessTokenExpiresAt!.getTime()).toBe(now + 3600 * 1000);
+  });
+
+  it('does not rotate when the same refresh token is returned', async () => {
+    const refresh = jest
+      .fn<(rt: string) => Promise<{ token: { access_token: string; expires_in?: number; refresh_token?: string } }>>()
+      .mockResolvedValueOnce({ token: { access_token: 'a2', expires_in: 3600, refresh_token: 'rt' } });
+    let now = 0;
+    const repo2 = new InMemoryConnectionRepo();
+    const vm = new VaultManager({
+      repo: repo2,
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: refresh }),
+      now: () => now,
+      accessBufferMs: 0,
+    });
+    await seed(vm);
+    const before = await decryptSecret((await vm.getConnectionByTenant(TENANT))!.encRefreshToken, kp, TENANT);
+    now = 3600 * 1000 + 1;
+    await vm.getFreshAccessToken(TENANT);
+    const after = await decryptSecret((await vm.getConnectionByTenant(TENANT))!.encRefreshToken, kp, TENANT);
+    expect(after).toBe(before);
+  });
+
+  it('classifies a non-Error rejection as transient (stringifying the reason)', async () => {
+    const refresh = jest
+      .fn<(rt: string) => Promise<{ token: { access_token: string } }>>()
+      .mockRejectedValueOnce({ code: 503 }); // not an Error instance, no invalid_grant text
+    let now = 0;
+    const vm = new VaultManager({
+      repo: new InMemoryConnectionRepo(),
+      keyProvider: kp,
+      makeOAuthClient: () => ({ refreshUsingToken: refresh }),
+      now: () => now,
+      accessBufferMs: 0,
+    });
+    await seed(vm);
+    now = 3600 * 1000 + 1;
+    await expect(vm.getFreshAccessToken(TENANT)).rejects.toBeInstanceOf(RefreshTransientError);
+  });
+});

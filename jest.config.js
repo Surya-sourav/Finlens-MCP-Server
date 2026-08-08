@@ -12,6 +12,28 @@ export default {
     'src/**/*.ts',
     '!src/**/*.d.ts',
     '!src/types/**/*.ts',
+    // Multi-tenant layer (Core/) — measured under the same 100% gate, except:
+    'Core/**/*.ts',
+    // Boot/composition entry points (wired at startup, exercised via live smoke):
+    '!Core/index.ts',
+    '!Core/Vault/index.ts',
+    // DB adapters + connection + schema + migrator (require a live Neon DB;
+    // covered by integration, not unit tests):
+    '!Core/**/db/**',
+    // Factories that construct intuit-oauth clients from env at call time:
+    '!Core/Vault/oauth-client-factory.ts',
+    '!Core/http/intuit-connect-client.ts',
+    // Default-deps path here dynamically imports registerAllTools; covering it
+    // would pull all 141 tool modules into the report. Verified via live smoke.
+    '!Core/http/handle-mcp-request.ts',
+    // Transport/composition glue: buildApp wires the QB-client resolver and the
+    // MCP route stores a default handler that calls handleMcpPost — arrows only
+    // reachable via a full live MCP request (exercised via live smoke), not unit
+    // tests. Their branch logic (routes, 405s, preHandler) is tested directly.
+    '!Core/http/app.ts',
+    '!Core/http/mcp.route.ts',
+    // Phase-1 dev shim, replaced by the Vault in Phase 2+:
+    '!Core/dev/**',
   ],
   coverageThreshold: {
     global: {

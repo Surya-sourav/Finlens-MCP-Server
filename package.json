@@ -15,6 +15,7 @@
         "start:server": "node dist-server/Core/index.js",
         "db:generate": "drizzle-kit generate",
         "db:migrate": "drizzle-kit migrate",
+        "db:migrate:prod": "node dist-server/Core/Vault/db/migrate.js",
         "prepare": "npm run build",
         "watch": "tsc --watch",
         "lint:fix": "eslint --fix",

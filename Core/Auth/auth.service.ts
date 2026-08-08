@@ -23,14 +23,6 @@ export interface WorkOSAuthProviderConfig {
   issuer: string;
   audience: string;
   jwks: JWTVerifyGetKey;
-  /** Optional claim-name overrides (defaults: sub, org_id, email, scope, azp). */
-  claims?: {
-    userId?: string;
-    orgId?: string;
-    email?: string;
-    scope?: string;
-    clientId?: string;
-  };
 }
 
 /**
@@ -47,26 +39,29 @@ export class WorkOSAuthProvider implements AuthProvider {
     if (!issuer || !audience) {
       throw new Error("WORKOS_ISSUER and MCP_RESOURCE_URL are required for WorkOS auth.");
     }
-    const jwksUri = env.WORKOS_JWKS_URI || new URL("/.well-known/jwks.json", issuer).toString();
+    // WorkOS AuthKit serves its OAuth JWKS at /oauth2/jwks (not the generic
+    // /.well-known/jwks.json). Overridable via WORKOS_JWKS_URI.
+    const jwksUri = env.WORKOS_JWKS_URI || new URL("/oauth2/jwks", issuer).toString();
     return new WorkOSAuthProvider({ issuer, audience, jwks: createRemoteJWKSet(new URL(jwksUri)) });
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const { payload } = await jwtVerify(token, this.cfg.jwks, {
-      issuer: this.cfg.issuer,
+      // Normalize a trailing slash: the JWT `iss` has none, so `…authkit.app/`
+      // in config would otherwise reject every token.
+      issuer: this.cfg.issuer.replace(/\/+$/, ""),
       audience: this.cfg.audience,
     });
 
-    const c = this.cfg.claims ?? {};
-    const sub = payload[c.userId ?? "sub"];
+    const sub = payload["sub"];
     if (typeof sub !== "string" || sub.length === 0) {
       throw new Error("Access token missing subject claim.");
     }
 
-    const orgId = payload[c.orgId ?? "org_id"];
-    const email = payload[c.email ?? "email"];
-    const scopeRaw = payload[c.scope ?? "scope"];
-    const clientId = payload[c.clientId ?? "azp"] ?? payload["client_id"];
+    const orgId = payload["org_id"];
+    const email = payload["email"];
+    const scopeRaw = payload["scope"];
+    const clientId = payload["azp"] ?? payload["client_id"];
 
     return {
       token,

@@ -20,13 +20,13 @@ beforeAll(async () => {
 
 async function makeToken(
   claims: Record<string, unknown>,
-  opts: { issuer?: string; audience?: string; sub?: string | null; exp?: string } = {},
+  opts: { issuer?: string; audience?: string; sub?: string | null; exp?: string; noExp?: boolean } = {},
 ): Promise<string> {
   let builder = new SignJWT(claims)
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
     .setIssuer(opts.issuer ?? ISSUER)
-    .setAudience(opts.audience ?? AUDIENCE)
-    .setExpirationTime(opts.exp ?? '1h');
+    .setAudience(opts.audience ?? AUDIENCE);
+  if (!opts.noExp) builder = builder.setExpirationTime(opts.exp ?? '1h');
   if (opts.sub !== null) builder = builder.setSubject(opts.sub ?? 'user-1');
   return builder.sign(privateKey);
 }
@@ -72,6 +72,31 @@ describe('WorkOSAuthProvider', () => {
   it('rejects a token missing the subject claim', async () => {
     const token = await makeToken({}, { sub: null });
     await expect(provider().verifyAccessToken(token)).rejects.toThrow(/subject/i);
+  });
+
+  it('extracts the client id from the azp claim', async () => {
+    const token = await makeToken({ azp: 'client-xyz' });
+    const info = await provider().verifyAccessToken(token);
+    expect(info.clientId).toBe('client-xyz');
+  });
+
+  it('falls back to the client_id claim when azp is absent', async () => {
+    const token = await makeToken({ client_id: 'client-fallback' });
+    const info = await provider().verifyAccessToken(token);
+    expect(info.clientId).toBe('client-fallback');
+  });
+
+  it('defaults expiresAt to 0 when the token has no exp claim', async () => {
+    const token = await makeToken({}, { noExp: true });
+    const info = await provider().verifyAccessToken(token);
+    expect(info.expiresAt).toBe(0);
+  });
+
+  it('tolerates a trailing slash on the configured issuer', async () => {
+    const providerWithSlash = new WorkOSAuthProvider({ issuer: `${ISSUER}/`, audience: AUDIENCE, jwks });
+    const token = await makeToken({}); // iss = ISSUER (no slash)
+    const info = await providerWithSlash.verifyAccessToken(token);
+    expect(info.workosUserId).toBe('user-1');
   });
 });
 

@@ -1,6 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getTenantContext, runWithTenant, type TenantContext } from "../transport/tenant-context.js";
+import { wrapServerWithAudit } from "./audit-tool-wrapper.js";
+import type { ToolAuditRecord } from "../Vault/audit.logger.js";
+
+// Injected once at boot (Core/index.ts) when audit is enabled. Receives a
+// ToolAuditRecord per tool call; the sink enriches it with the ALS tenant.
+let auditSink: ((record: ToolAuditRecord) => void) | null = null;
+export function setAuditSink(fn: ((record: ToolAuditRecord) => void) | null): void {
+  auditSink = fn;
+}
 
 /**
  * Minimal structural shapes for the MCP server + transport. Kept local (instead
@@ -77,8 +86,11 @@ async function getDefaultDeps(): Promise<HandleMcpDeps> {
     defaultDeps = {
       createServer: () => QuickbooksMCPServer.CreateServer() as unknown as McpServerLike,
       registerTools: (server) => {
-        registerAllTools(server as unknown as McpServer);
-        registerConnectTool(server as unknown as McpServer);
+        const target = auditSink
+          ? wrapServerWithAudit(server as unknown as McpServer, auditSink)
+          : (server as unknown as McpServer);
+        registerAllTools(target);
+        registerConnectTool(target);
       },
       // Stateless mode: no session id, a fresh transport per request. Combined
       // with a fresh server per request this prevents cross-tenant response

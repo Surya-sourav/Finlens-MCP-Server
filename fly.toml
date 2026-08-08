@@ -1,0 +1,37 @@
+# Fly.io config for the Finlens x QB multi-tenant MCP server.
+# Set secrets before first deploy:
+#   fly secrets set DATABASE_URL=... FINLENS_MASTER_KEY=... FINLENS_MASTER_KEY_ID=local-1 \
+#     INTUIT_STATE_SECRET=... WORKOS_ISSUER=... MCP_RESOURCE_URL=https://<app>.fly.dev/mcp \
+#     QUICKBOOKS_CLIENT_ID=... QUICKBOOKS_CLIENT_SECRET=... \
+#     QUICKBOOKS_REDIRECT_URI=https://<app>.fly.dev/callback QUICKBOOKS_ENVIRONMENT=sandbox
+app = "finlens-mcp"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  QBO_MULTI_TENANT = "true"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "5s"
+
+[deploy]
+  # Applies pending migrations before the new version takes traffic.
+  release_command = "node dist-server/Core/Vault/db/migrate.js"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
