@@ -2,7 +2,9 @@
 FROM node:22-slim AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# --ignore-scripts: skip the `prepare` lifecycle (it runs `tsc` for the stdio
+# build we don't need here); we build explicitly with build:server below.
+RUN npm ci --ignore-scripts
 COPY tsconfig.json tsconfig.server.json ./
 COPY src ./src
 COPY Core ./Core
@@ -16,7 +18,9 @@ ENV QBO_MULTI_TENANT=true
 ENV PORT=8080
 
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# --omit=dev drops typescript etc.; --ignore-scripts stops the `prepare` script
+# from running `tsc` (which is absent in prod) → the exit-code-127 build failure.
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # Compiled server + migrations (the prod migrator uses drizzle-orm, not drizzle-kit).
 COPY --from=build /app/dist-server ./dist-server
