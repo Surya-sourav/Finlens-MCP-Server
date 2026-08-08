@@ -509,24 +509,16 @@ export class QuickbooksClient {
   // across 60-minute token boundaries without server restarts.
   static async getInstance(): Promise<QuickBooks> {
     const src = tenantResolver?.();
-    if (src) {
-      return QuickbooksClient.buildForTenant(src);
-    }
-    // SECURITY: in multi-tenant mode, never fall back to the global/singleton QB
-    // credentials — doing so would serve one tenant's (or the operator's) QB
-    // company to every caller. Fail closed if no tenant is in scope.
-    if (MULTI_TENANT) {
+    if (!src) {
+      // SECURITY: there is no global/singleton fallback. Every request must
+      // resolve to a tenant's OWN credentials via a registered resolver (the
+      // Vault in multi-tenant mode, or the explicit single-tenant resolver for
+      // local/stdio). Fail closed otherwise — never serve shared QB creds.
       throw new Error(
-        "No tenant credentials in scope; refusing to use global QuickBooks credentials in multi-tenant mode.",
+        "No QuickBooks tenant credentials in scope: no resolver is registered (there is no global fallback).",
       );
     }
-    if (quickbooksClient.isTokenExpiredOrExpiringSoon()) {
-      await quickbooksClient.authenticate();
-    }
-    if (!quickbooksClient.quickbooksInstance) {
-      await quickbooksClient.authenticate();
-    }
-    return quickbooksClient.quickbooksInstance!;
+    return QuickbooksClient.buildForTenant(src);
   }
 
   // Static counterpart to getInstance() — returns raw OAuth credentials for
@@ -535,25 +527,37 @@ export class QuickbooksClient {
   // every invocation, same as getInstance().
   static async getAuthCredentials(): Promise<{ accessToken: string; realmId: string; isSandbox: boolean }> {
     const src = tenantResolver?.();
-    if (src) {
-      return src.getFreshAccessToken();
-    }
-    // SECURITY: fail closed in multi-tenant mode (see getInstance).
-    if (MULTI_TENANT) {
+    if (!src) {
+      // SECURITY: no global fallback — require a tenant credential source.
       throw new Error(
-        "No tenant credentials in scope; refusing to use global QuickBooks credentials in multi-tenant mode.",
+        "No QuickBooks tenant credentials in scope: no resolver is registered (there is no global fallback).",
       );
     }
-    if (quickbooksClient.isTokenExpiredOrExpiringSoon() || !quickbooksClient.accessToken) {
-      await quickbooksClient.authenticate();
-    }
-    if (!quickbooksClient.accessToken || !quickbooksClient.realmId) {
-      throw new Error('Quickbooks not authenticated');
-    }
+    return src.getFreshAccessToken();
+  }
+
+  /**
+   * Explicit single-tenant credential source for LOCAL / stdio mode only,
+   * backed by the env QB app + refresh token via the interactive/refresh OAuth
+   * machinery. Installed by src/index.ts. Multi-tenant deployments never call
+   * this — they inject a Vault-backed resolver. This makes the single-tenant
+   * path opt-in and explicit instead of a silent global fallback.
+   */
+  static singleTenantSource(): TenantCredentialSource {
     return {
-      accessToken: quickbooksClient.accessToken,
-      realmId: quickbooksClient.realmId,
-      isSandbox: quickbooksClient.environment === 'sandbox',
+      getFreshAccessToken: async () => {
+        if (quickbooksClient.isTokenExpiredOrExpiringSoon() || !quickbooksClient.accessToken) {
+          await quickbooksClient.authenticate();
+        }
+        if (!quickbooksClient.accessToken || !quickbooksClient.realmId) {
+          throw new Error("Quickbooks not authenticated");
+        }
+        return {
+          accessToken: quickbooksClient.accessToken,
+          realmId: quickbooksClient.realmId,
+          isSandbox: quickbooksClient.environment === "sandbox",
+        };
+      },
     };
   }
 

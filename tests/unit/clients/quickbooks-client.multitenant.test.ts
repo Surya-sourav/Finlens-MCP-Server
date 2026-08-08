@@ -118,12 +118,12 @@ describe('QuickbooksClient multi-tenant mode', () => {
 
   it('SECURITY: getInstance fails closed (throws) when no tenant is in scope', async () => {
     QuickbooksClient.useTenantResolver(() => undefined); // no tenant context
-    await expect(QuickbooksClient.getInstance()).rejects.toThrow(/refusing to use global QuickBooks/i);
+    await expect(QuickbooksClient.getInstance()).rejects.toThrow(/no global fallback/i);
   });
 
   it('SECURITY: getAuthCredentials fails closed (throws) when no tenant is in scope', async () => {
     QuickbooksClient.useTenantResolver(() => undefined);
-    await expect(QuickbooksClient.getAuthCredentials()).rejects.toThrow(/refusing to use global QuickBooks/i);
+    await expect(QuickbooksClient.getAuthCredentials()).rejects.toThrow(/no global fallback/i);
   });
 
   it('getAuthCredentials returns the injected tenant credentials directly', async () => {
