@@ -10,8 +10,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /healthz
-    # Run pending Neon migrations, then start the server. Idempotent on each boot.
-    dockerCommand: /bin/sh -c "node dist-server/Core/Vault/db/migrate.js && node dist-server/Core/index.js"
+    # No dockerCommand — use the image's CMD (migrate && exec server) from the
+    # Dockerfile, which handles the shell chaining reliably.
     autoDeploy: true
     envVars:
       - key: QBO_MULTI_TENANT

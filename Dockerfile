@@ -27,4 +27,6 @@ COPY --from=build /app/dist-server ./dist-server
 COPY drizzle ./drizzle
 
 EXPOSE 8080
-CMD ["node", "dist-server/Core/index.js"]
+# Apply pending migrations, then hand off (exec) to the server so it becomes
+# PID 1 and receives SIGTERM for graceful shutdown. sh -c handles the &&.
+CMD ["/bin/sh", "-c", "node dist-server/Core/Vault/db/migrate.js && exec node dist-server/Core/index.js"]
