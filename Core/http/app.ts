@@ -5,6 +5,7 @@ import { registerMcpRoutes } from "./mcp.route.js";
 import { registerConnectRoutes, type ConnectRouteDeps } from "./connect.route.js";
 import { registerWellKnownRoutes, type ProtectedResourceMetadata } from "../Auth/http.js";
 import { devTenantResolver } from "../dev/dev-resolver.js";
+import { FAVICON_PNG } from "./favicon.js";
 
 export interface BuildAppOptions {
   /**
@@ -33,6 +34,12 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
   QuickbooksClient.useTenantResolver(() => getTenantContext());
 
   app.get("/healthz", async () => ({ status: "ok" }));
+
+  // Serve the Finlens logo so MCP clients show it as the connector icon.
+  const sendFavicon = async (_req: FastifyRequest, reply: import("fastify").FastifyReply) =>
+    reply.header("Cache-Control", "public, max-age=86400").type("image/png").send(FAVICON_PNG);
+  app.get("/favicon.ico", sendFavicon);
+  app.get("/favicon.png", sendFavicon);
 
   if (opts.wellKnownMetadata) {
     registerWellKnownRoutes(app, opts.wellKnownMetadata);
