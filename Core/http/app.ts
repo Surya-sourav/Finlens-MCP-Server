@@ -1,7 +1,9 @@
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyRequest, type preHandlerHookHandler } from "fastify";
 import { QuickbooksClient } from "../../src/clients/quickbooks-client.js";
 import { getTenantContext, type TenantContext } from "../transport/tenant-context.js";
 import { registerMcpRoutes } from "./mcp.route.js";
+import { registerConnectRoutes, type ConnectRouteDeps } from "./connect.route.js";
+import { registerWellKnownRoutes, type ProtectedResourceMetadata } from "../Auth/http.js";
 import { devTenantResolver } from "../dev/dev-resolver.js";
 
 export interface BuildAppOptions {
@@ -10,10 +12,17 @@ export interface BuildAppOptions {
    * (single tenant from global QB env). Phase 3 injects the WorkOS resolver.
    */
   resolveTenant?: (req: FastifyRequest) => Promise<TenantContext>;
+  /** Bearer validator applied to POST /mcp (and reused by /connect). Phase 3. */
+  mcpPreHandler?: preHandlerHookHandler;
+  /** When set, serves the RFC 9728 protected-resource metadata. Phase 3. */
+  wellKnownMetadata?: ProtectedResourceMetadata;
+  /** When set, registers the Intuit /connect + /callback routes. Phase 3. */
+  connectRoutes?: ConnectRouteDeps;
 }
 
 /**
- * Builds the multi-tenant HTTP app: the public /mcp endpoint plus health check.
+ * Builds the multi-tenant HTTP app: the public /mcp endpoint, health check, and
+ * (in Phase 3) the OAuth protected-resource metadata + Intuit connect flow.
  * Wires the QuickBooks client's DI seam so every getInstance()/
  * getAuthCredentials() inside an MCP request resolves the tenant from the
  * AsyncLocalStorage TenantContext set by handleMcpPost.
@@ -25,8 +34,15 @@ export function buildApp(opts: BuildAppOptions = {}): FastifyInstance {
 
   app.get("/healthz", async () => ({ status: "ok" }));
 
+  if (opts.wellKnownMetadata) {
+    registerWellKnownRoutes(app, opts.wellKnownMetadata);
+  }
+  if (opts.connectRoutes) {
+    registerConnectRoutes(app, opts.connectRoutes);
+  }
+
   const resolveTenant = opts.resolveTenant ?? (async () => devTenantResolver());
-  registerMcpRoutes(app, { resolveTenant });
+  registerMcpRoutes(app, { resolveTenant, preHandler: opts.mcpPreHandler });
 
   return app;
 }

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleMcpPost } from "./handle-mcp-request.js";
 import type { TenantContext } from "../transport/tenant-context.js";
@@ -9,6 +9,12 @@ export interface McpRouteOptions {
    * resolver; Phase 3 swaps in WorkOS bearer validation.
    */
   resolveTenant: (req: FastifyRequest) => Promise<TenantContext>;
+  /**
+   * Optional preHandler for POST /mcp — the WorkOS bearer validator (Phase 3).
+   * When set, an unauthenticated MCP request gets the 401 + WWW-Authenticate
+   * challenge before the tenant is resolved.
+   */
+  preHandler?: preHandlerHookHandler;
   /**
    * Overridable POST handler (defaults to the real stateless handleMcpPost).
    * Exists so tests can assert routing/hijack behavior without a live MCP
@@ -30,7 +36,8 @@ export interface McpRouteOptions {
 export function registerMcpRoutes(app: FastifyInstance, opts: McpRouteOptions): void {
   const handle = opts.handle ?? ((req, res, ctx, body) => handleMcpPost(req, res, ctx, body));
 
-  app.post("/mcp", async (req: FastifyRequest, reply: FastifyReply) => {
+  const postOpts = opts.preHandler ? { preHandler: opts.preHandler } : {};
+  app.post("/mcp", postOpts, async (req: FastifyRequest, reply: FastifyReply) => {
     const ctx = await opts.resolveTenant(req);
     // Detach Fastify's reply lifecycle so the MCP transport streams directly to
     // the raw Node response (SSE or JSON).

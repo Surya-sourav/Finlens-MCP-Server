@@ -25,6 +25,10 @@ export interface TenantContext {
   /** Optional, for logging/telemetry only. */
   isSandbox?: boolean;
   getFreshAccessToken: () => Promise<QboCredentials>;
+  /** Whether this tenant has an active QuickBooks connection (Phase 3+). */
+  isConnected?: () => Promise<boolean>;
+  /** A browser-usable Intuit authorize URL to (re)connect QuickBooks (Phase 3+). */
+  getConnectUrl?: () => string;
 }
 
 const storage = new AsyncLocalStorage<TenantContext>();

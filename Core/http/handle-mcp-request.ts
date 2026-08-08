@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { runWithTenant, type TenantContext } from "../transport/tenant-context.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { getTenantContext, runWithTenant, type TenantContext } from "../transport/tenant-context.js";
 
 /**
  * Minimal structural shapes for the MCP server + transport. Kept local (instead
@@ -25,6 +26,42 @@ export interface HandleMcpDeps {
   createTransport: () => McpTransportLike;
 }
 
+/**
+ * Registers the Core-only `connect_quickbooks` tool on the per-request server.
+ * It reads the ALS TenantContext to report connection status and surface a
+ * browser-usable Intuit connect link. Lives here (not in registerAllTools) so
+ * src/ stays free of any Core dependency.
+ */
+export function registerConnectTool(server: McpServer): void {
+  server.tool(
+    "connect_quickbooks",
+    "Check whether QuickBooks is connected for this workspace and, if not, return a link to connect it.",
+    async () => {
+      const ctx = getTenantContext();
+      if (!ctx) {
+        return { content: [{ type: "text" as const, text: "No tenant context available." }] };
+      }
+      const connected = ctx.isConnected ? await ctx.isConnected() : false;
+      if (connected) {
+        return {
+          content: [{ type: "text" as const, text: "QuickBooks is already connected for this workspace." }],
+        };
+      }
+      const url = ctx.getConnectUrl?.();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: url
+              ? `QuickBooks is not connected. Open this link to connect: ${url}`
+              : "QuickBooks is not connected, and no connect URL is available in this mode.",
+          },
+        ],
+      };
+    },
+  );
+}
+
 let defaultDeps: HandleMcpDeps | undefined;
 
 // Lazily resolve the real dependencies on first use. Dynamic import keeps the
@@ -39,7 +76,10 @@ async function getDefaultDeps(): Promise<HandleMcpDeps> {
       ]);
     defaultDeps = {
       createServer: () => QuickbooksMCPServer.CreateServer() as unknown as McpServerLike,
-      registerTools: (server) => registerAllTools(server as never),
+      registerTools: (server) => {
+        registerAllTools(server as unknown as McpServer);
+        registerConnectTool(server as unknown as McpServer);
+      },
       // Stateless mode: no session id, a fresh transport per request. Combined
       // with a fresh server per request this prevents cross-tenant response
       // routing (single bound transport + client-chosen JSON-RPC ids).
