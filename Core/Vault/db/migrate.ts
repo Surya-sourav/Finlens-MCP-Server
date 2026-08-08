@@ -12,8 +12,10 @@ async function main(): Promise<void> {
   console.log("[migrate] migrations applied.");
 }
 
-main().catch((err) => {
-  // eslint-disable-next-line no-console
-  console.error("[migrate] failed:", err);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0)) // exit cleanly so it can chain before the server starts
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error("[migrate] failed:", err);
+    process.exit(1);
+  });

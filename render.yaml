@@ -1,0 +1,41 @@
+# Render Blueprint for the Finlens x QB multi-tenant MCP server.
+# Deploy: push to GitHub → Render Dashboard → New → Blueprint → pick this repo.
+# Then fill the `sync: false` secrets in the Render dashboard.
+services:
+  - type: web
+    name: finlens-qb-mcp
+    runtime: docker
+    plan: starter          # keeps it always-on (free tier sleeps → breaks the refresh cron + adds cold starts)
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    # Run pending Neon migrations, then start the server. Idempotent on each boot.
+    dockerCommand: /bin/sh -c "node dist-server/Core/Vault/db/migrate.js && node dist-server/Core/index.js"
+    autoDeploy: true
+    envVars:
+      - key: QBO_MULTI_TENANT
+        value: "true"
+      # PORT is provided by Render automatically; the app reads process.env.PORT.
+      # ── Non-secret config (set to the FINAL onrender.com host after first deploy) ──
+      - key: QUICKBOOKS_ENVIRONMENT
+        value: sandbox
+      - key: WORKOS_ISSUER
+        value: https://sincere-peacock-34-staging.authkit.app
+      - key: MCP_RESOURCE_URL
+        sync: false          # https://<service>.onrender.com/mcp  (set after you know the URL)
+      - key: QUICKBOOKS_REDIRECT_URI
+        sync: false          # https://<service>.onrender.com/callback
+      # ── Secrets (set values in the Render dashboard) ──
+      - key: DATABASE_URL
+        sync: false
+      - key: FINLENS_MASTER_KEY
+        sync: false
+      - key: FINLENS_MASTER_KEY_ID
+        value: local-1
+      - key: INTUIT_STATE_SECRET
+        sync: false
+      - key: QUICKBOOKS_CLIENT_ID
+        sync: false
+      - key: QUICKBOOKS_CLIENT_SECRET
+        sync: false
